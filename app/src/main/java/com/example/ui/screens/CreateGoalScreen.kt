@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -30,6 +31,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AddAPhoto
 import androidx.compose.material.icons.outlined.BookmarkAdded
+import androidx.compose.material.icons.outlined.BrokenImage
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DirectionsBus
@@ -43,6 +45,7 @@ import androidx.compose.material.icons.outlined.Verified
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -51,10 +54,12 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,6 +69,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -73,7 +79,9 @@ import coil.compose.SubcomposeAsyncImage
 import com.example.data.local.SavingsGoalEntity
 import com.example.ui.theme.SereneTheme
 import com.example.util.HotlinkedImages
+import com.example.util.ImageStorageHelper
 import com.example.util.LkrFormatter
+import kotlinx.coroutines.launch
 import java.util.Locale
 
 @Composable
@@ -98,14 +106,59 @@ fun CreateGoalScreen(
     var allocatedAmount by remember(existingGoal) {
         mutableDoubleStateOf(existingGoal?.allocatedAmount ?: 0.0)
     }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var showWebUrlDialog by remember { mutableStateOf(false) }
+    var isSavingImage by remember { mutableStateOf(false) }
     var validationError by remember { mutableStateOf<String?>(null) }
+    val sessionCreatedUris = remember(existingGoal?.id) { mutableListOf<String>() }
+
+    // Best-effort upgrade for any legacy content:// URI from earlier versions while still readable
+    LaunchedEffect(existingGoal?.id, existingGoal?.imageUri) {
+        val current = existingGoal?.imageUri
+        if (!current.isNullOrBlank() && current.startsWith("content://")) {
+            val migrated = ImageStorageHelper.persistPickedImage(
+                context = context,
+                sourceUri = Uri.parse(current),
+                subdirectory = ImageStorageHelper.GOAL_IMAGES_DIR
+            )
+            if (migrated != null) {
+                sessionCreatedUris.add(migrated)
+                imageUri = migrated
+            }
+        }
+    }
+
+    val discardAndCleanup = {
+        sessionCreatedUris.forEach { uriStr ->
+            ImageStorageHelper.deleteOwnedImage(context, uriStr)
+        }
+        sessionCreatedUris.clear()
+        onDiscard()
+    }
+
+    BackHandler(onBack = discardAndCleanup)
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         if (uri != null) {
-            imageUri = uri.toString()
+            isSavingImage = true
+            validationError = null
+            scope.launch {
+                val persistedUri = ImageStorageHelper.persistPickedImage(
+                    context = context,
+                    sourceUri = uri,
+                    subdirectory = ImageStorageHelper.GOAL_IMAGES_DIR
+                )
+                isSavingImage = false
+                if (persistedUri != null) {
+                    sessionCreatedUris.add(persistedUri)
+                    imageUri = persistedUri
+                } else {
+                    validationError = "Couldn't save the selected photo. Please try another image."
+                }
+            }
         }
     }
 
@@ -200,7 +253,7 @@ fun CreateGoalScreen(
                     )
                 }
 
-                if (imageUri == null) {
+                if (imageUri == null && !isSavingImage) {
                     Surface(
                         shape = RoundedCornerShape(18.dp),
                         color = SereneTheme.colors.surfaceContainerLow,
@@ -310,12 +363,58 @@ fun CreateGoalScreen(
                             .clip(RoundedCornerShape(18.dp))
                             .background(SereneTheme.colors.surfaceContainerHighest)
                     ) {
-                        SubcomposeAsyncImage(
-                            model = imageUri,
-                            contentDescription = "Selected goal image",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
+                        if (imageUri != null) {
+                            SubcomposeAsyncImage(
+                                model = imageUri,
+                                contentDescription = "Selected goal image",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize(),
+                                loading = {
+                                    Box(
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                                    }
+                                },
+                                error = {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(16.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.BrokenImage,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(32.dp)
+                                        )
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Text(
+                                            text = "Image unavailable — tap Change Photo to re-upload",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            textAlign = TextAlign.Center
+                                        )
+                                    }
+                                }
+                            )
+                        }
+                        if (isSavingImage) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.35f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(
+                                    color = Color.White,
+                                    modifier = Modifier.size(32.dp)
+                                )
+                            }
+                        }
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -344,7 +443,7 @@ fun CreateGoalScreen(
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Text(
-                                    text = "Product photo attached",
+                                    text = if (isSavingImage) "Saving product photo..." else "Product photo attached",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = Color.White
                                 )
@@ -668,6 +767,7 @@ fun CreateGoalScreen(
                 modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
             ) {
                 Button(
+                    enabled = !isSavingImage,
                     onClick = {
                         if (itemName.isBlank()) {
                             validationError = "Please enter an item name."
@@ -684,6 +784,14 @@ fun CreateGoalScreen(
                                 ).host.orEmpty().removePrefix("www.")
                                 host.replaceFirstChar { it.uppercase() }
                             }.getOrDefault("").ifBlank { "Savings Goal" }
+                        }
+                        sessionCreatedUris
+                            .filter { it != imageUri }
+                            .forEach { ImageStorageHelper.deleteOwnedImage(context, it) }
+                        sessionCreatedUris.clear()
+                        val previousUri = existingGoal?.imageUri
+                        if (previousUri != null && previousUri != imageUri) {
+                            ImageStorageHelper.deleteOwnedImage(context, previousUri)
                         }
                         onSave(
                             SavingsGoalEntity(
@@ -723,7 +831,7 @@ fun CreateGoalScreen(
                 }
 
                 TextButton(
-                    onClick = onDiscard,
+                    onClick = discardAndCleanup,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(46.dp)

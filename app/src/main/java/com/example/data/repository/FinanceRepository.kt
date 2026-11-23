@@ -1,5 +1,6 @@
 package com.example.data.repository
 
+import android.content.Context
 import com.example.data.local.CategoryEntity
 import com.example.data.local.FinanceDao
 import com.example.data.local.SavingsGoalEntity
@@ -10,12 +11,14 @@ import com.example.data.preferences.UserPrefs
 import com.example.ui.theme.ThemeMode
 import com.example.util.BackupPayload
 import com.example.util.HotlinkedImages
+import com.example.util.ImageStorageHelper
 import kotlinx.coroutines.flow.Flow
 import java.util.Calendar
 
 class FinanceRepository(
     private val dao: FinanceDao,
-    private val prefsRepo: UserPreferencesRepository
+    private val prefsRepo: UserPreferencesRepository,
+    private val appContext: Context? = null
 ) {
     val transactions: Flow<List<TransactionEntity>> = dao.observeTransactions()
     val goals: Flow<List<SavingsGoalEntity>> = dao.observeGoals()
@@ -123,7 +126,11 @@ class FinanceRepository(
     }
 
     suspend fun deleteGoal(goalId: Long) {
+        val existing = dao.getGoalById(goalId)
         dao.deleteGoalById(goalId)
+        if (appContext != null && existing?.imageUri != null) {
+            ImageStorageHelper.deleteOwnedImage(appContext, existing.imageUri)
+        }
     }
 
     suspend fun addCategory(name: String, iconKey: String, colorHex: Long) {

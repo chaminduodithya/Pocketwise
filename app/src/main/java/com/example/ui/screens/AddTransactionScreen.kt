@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -51,6 +52,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -62,16 +64,19 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -85,6 +90,8 @@ import com.example.data.local.TransactionType
 import com.example.ui.theme.SereneTheme
 import com.example.util.CategoryIcons
 import com.example.util.DateFormatters
+import com.example.util.ImageStorageHelper
+import kotlinx.coroutines.launch
 import java.util.Calendar
 import java.util.Locale
 
@@ -138,15 +145,59 @@ fun AddTransactionScreen(
     var receiptUri by remember(existingTransaction) {
         mutableStateOf(existingTransaction?.receiptImageUri)
     }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var showDatePicker by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var isSavingReceipt by remember { mutableStateOf(false) }
     var validationError by remember { mutableStateOf<String?>(null) }
+    val sessionCreatedUris = remember(existingTransaction?.id) { mutableListOf<String>() }
+
+    LaunchedEffect(existingTransaction?.id, existingTransaction?.receiptImageUri) {
+        val current = existingTransaction?.receiptImageUri
+        if (!current.isNullOrBlank() && current.startsWith("content://")) {
+            val migrated = ImageStorageHelper.persistPickedImage(
+                context = context,
+                sourceUri = Uri.parse(current),
+                subdirectory = ImageStorageHelper.RECEIPT_IMAGES_DIR
+            )
+            if (migrated != null) {
+                sessionCreatedUris.add(migrated)
+                receiptUri = migrated
+            }
+        }
+    }
+
+    val cancelAndCleanup = {
+        sessionCreatedUris.forEach { uriStr ->
+            ImageStorageHelper.deleteOwnedImage(context, uriStr)
+        }
+        sessionCreatedUris.clear()
+        onCancel()
+    }
+
+    BackHandler(onBack = cancelAndCleanup)
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         if (uri != null) {
-            receiptUri = uri.toString()
+            isSavingReceipt = true
+            validationError = null
+            scope.launch {
+                val persistedUri = ImageStorageHelper.persistPickedImage(
+                    context = context,
+                    sourceUri = uri,
+                    subdirectory = ImageStorageHelper.RECEIPT_IMAGES_DIR
+                )
+                isSavingReceipt = false
+                if (persistedUri != null) {
+                    sessionCreatedUris.add(persistedUri)
+                    receiptUri = persistedUri
+                } else {
+                    validationError = "Couldn't save the selected receipt photo. Please try another image."
+                }
+            }
         }
     }
 
@@ -641,7 +692,22 @@ fun AddTransactionScreen(
                                 )
                             }
                     ) {
-                        if (receiptUri != null) {
+                        if (isSavingReceipt) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                                Text(
+                                    text = "Saving receipt photo...",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        } else if (receiptUri != null) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -744,6 +810,7 @@ fun AddTransactionScreen(
                     // Action Buttons
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Button(
+                            enabled = !isSavingReceipt,
                             onClick = {
                                 val parsedAmount = amountText.replace(",", "").trim().toDoubleOrNull()
                                 if (parsedAmount == null || parsedAmount <= 0.0) {
@@ -751,6 +818,14 @@ fun AddTransactionScreen(
                                     return@Button
                                 }
                                 val finalTitle = titleText.trim().ifBlank { selectedCategory }
+                                sessionCreatedUris
+                                    .filter { it != receiptUri }
+                                    .forEach { ImageStorageHelper.deleteOwnedImage(context, it) }
+                                sessionCreatedUris.clear()
+                                val previousUri = existingTransaction?.receiptImageUri
+                                if (previousUri != null && previousUri != receiptUri) {
+                                    ImageStorageHelper.deleteOwnedImage(context, previousUri)
+                                }
                                 onSave(
                                     TransactionEntity(
                                         id = existingTransaction?.id ?: 0L,
@@ -814,7 +889,7 @@ fun AddTransactionScreen(
                             }
                         } else {
                             TextButton(
-                                onClick = onCancel,
+                                onClick = cancelAndCleanup,
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)

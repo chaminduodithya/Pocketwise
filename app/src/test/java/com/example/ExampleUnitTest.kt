@@ -4,10 +4,13 @@ import com.example.data.local.TransactionEntity
 import com.example.data.local.TransactionType
 import com.example.data.repository.FinanceRepository
 import com.example.util.DateFormatters
+import com.example.util.ImageStorageHelper
 import com.example.util.LkrFormatter
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 class ExampleUnitTest {
     @Test
@@ -63,5 +66,22 @@ class ExampleUnitTest {
         val switchCashToCardDelta =
             FinanceRepository.bankBalanceEffect(cardExpense) - FinanceRepository.bankBalanceEffect(cashExpense)
         assertEquals(-750.0, switchCashToCardDelta, 0.001)
+    }
+
+    @Test
+    fun `image storage helper validates directory ownership and extensions`() {
+        val baseDir = File("/tmp/pocketwise_files")
+        val goalDir = File(baseDir, ImageStorageHelper.GOAL_IMAGES_DIR)
+        val validFile = File(goalDir, "goal_123.png")
+        val outsideFile = File(baseDir, "other/evil.jpg")
+        val traversalFile = File(goalDir, "../other/evil.jpg")
+
+        assertTrue(ImageStorageHelper.isFileInsideDirectory(validFile, goalDir))
+        assertFalse(ImageStorageHelper.isFileInsideDirectory(outsideFile, goalDir))
+        assertFalse(ImageStorageHelper.isFileInsideDirectory(traversalFile, goalDir))
+
+        assertEquals("png", ImageStorageHelper.resolveExtension(null, "image.PNG"))
+        assertEquals("webp", ImageStorageHelper.resolveExtension(null, "photo.webp"))
+        assertEquals("jpg", ImageStorageHelper.resolveExtension(null, "no_ext"))
     }
 }

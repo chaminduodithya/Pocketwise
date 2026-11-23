@@ -93,7 +93,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     init {
         val db = AppDatabase.getInstance(application)
         val prefs = UserPreferencesRepository(application)
-        repository = FinanceRepository(db.financeDao(), prefs)
+        repository = FinanceRepository(db.financeDao(), prefs, application)
         viewModelScope.launch {
             repository.ensureSeeded()
         }
