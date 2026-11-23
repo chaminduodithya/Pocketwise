@@ -1,0 +1,6 @@
+{
+  "name": "Pocketwise",
+  "description": "Offline-first personal finance, expense ledger, savings wishlist, and spending insights app in Sri Lankan Rupees (LKR).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
